@@ -68,9 +68,9 @@ typedef struct handler_global {
     struct MsgPort      *dosport;       /* DOS message port */
 #if ODFS_AMIGA_OS4
     struct Task         *handler_task;  /* task that owns handler ports */
-    struct Task         *vector_io_task; /* task owning cached vector I/O */
-    struct MsgPort      *vector_io_port; /* cached caller-task reply port */
-    struct IOStdReq     *vector_io_req;  /* cached caller-task I/O request */
+    struct Task         *vector_io_task; /* task owning vector_io_req */
+    struct MsgPort      *vector_io_port; /* caller-task reply port */
+    struct IOStdReq     *vector_io_req;  /* caller-task I/O request */
     struct FileSystemVectorPort *vector_port; /* native OS4 vector port */
     LONG                 vector_sigbit; /* signal bit used by vector port */
     /*
@@ -333,6 +333,8 @@ typedef struct odfs_handler_node_info {
 
 /* shared operations used by packet and OS4 vector frontends */
 #if ODFS_AMIGA_OS4
+/* Free the calling task's vector I/O request; call with fs_sem held. */
+void odfs_handler_release_caller_io(handler_global_t *g);
 void odfs_handler_fill_node_info(handler_global_t *g,
                                  const odfs_node_t *node,
                                  odfs_handler_node_info_t *info);

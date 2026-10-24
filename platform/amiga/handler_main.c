@@ -556,19 +556,21 @@ static void notify_workbench_disk_change(BOOL inserted)
 }
 
 #if ODFS_AMIGA_OS4
-static void release_vector_io_request(handler_global_t *g)
+/*
+ * The caller-task reply port holds a signal bit of the task that made
+ * it, so only that task may free it, and it must do so before it
+ * leaves the filesystem: a task that exits with the bit allocated
+ * makes the Shell report unfreed signals.
+ */
+void odfs_handler_release_caller_io(handler_global_t *g)
 {
-    if (!g)
+    if (!g || !g->vector_io_req || g->vector_io_task != FindTask(NULL))
         return;
 
-    if (g->vector_io_req) {
-        odfs_amiga_delete_io_request((struct IORequest *)g->vector_io_req);
-        g->vector_io_req = NULL;
-    }
-    if (g->vector_io_port) {
-        odfs_amiga_delete_msg_port(g->vector_io_port);
-        g->vector_io_port = NULL;
-    }
+    odfs_amiga_delete_io_request((struct IORequest *)g->vector_io_req);
+    odfs_amiga_delete_msg_port(g->vector_io_port);
+    g->vector_io_req = NULL;
+    g->vector_io_port = NULL;
     g->vector_io_task = NULL;
 }
 
@@ -585,13 +587,15 @@ static struct IOStdReq *vector_io_request_for_current_task(handler_global_t *g)
     if (task == g->handler_task)
         return g->devreq;
 
-    if (g->vector_io_req && g->vector_io_task == task) {
+    if (g->vector_io_req) {
+        /* every vector call releases its request before fs_sem, so
+         * a request owned by another task is never ours to free */
+        if (g->vector_io_task != task)
+            return NULL;
         g->vector_io_req->io_Device = g->devreq->io_Device;
         g->vector_io_req->io_Unit = g->devreq->io_Unit;
         return g->vector_io_req;
     }
-
-    release_vector_io_request(g);
 
     port = odfs_amiga_create_msg_port();
     if (!port)
@@ -617,9 +621,10 @@ static struct IOStdReq *vector_io_request_for_current_task(handler_global_t *g)
  * g->devreq. On OS4, native vector callbacks run in the caller's task,
  * but g->devreq replies to the handler task's port: if a caller-task
  * DoIO() has to wait for completion, the device signals the wrong task
- * and the caller blocks forever. Such callers get a cached request with
- * a reply port owned by their own task instead. Vector callbacks are
- * serialized by fs_sem, so one cached caller-task request is enough.
+ * and the caller blocks forever. Such callers get a request with a
+ * reply port owned by their own task instead, made on first use and
+ * kept until the callback releases fs_sem. Vector callbacks are
+ * serialized by fs_sem, so one caller-task request is enough.
  * Returns NULL when no request can be obtained.
  */
 static struct IOStdReq *media_io_request(handler_global_t *g)
@@ -6173,9 +6178,6 @@ void handler_main_startup(struct Message *startup_msg)
 
 shutdown:
     destroy_volume_publish_timer(g);
-#if ODFS_AMIGA_OS4
-    release_vector_io_request(g);
-#endif
     if (g->devreq) {
         if (g->devreq->io_Device)
             CloseDevice((struct IORequest *)g->devreq);

@@ -54,6 +54,8 @@ static __attribute__((noinline)) handler_global_t *vp_require_global(
 
 static void fs_unlock(handler_global_t *g)
 {
+    /* drop the caller-task I/O request while this task still owns it */
+    odfs_handler_release_caller_io(g);
     ReleaseSemaphore(&g->fs_sem);
 }
 
