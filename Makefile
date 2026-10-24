@@ -233,7 +233,9 @@ endif
 
 # Freestanding libc replacements: stop the compiler from recognizing
 # the copy loops and emitting calls to the functions being defined.
-$(AMIGA_BUILD)/platform/amiga/os4/freestanding.o: CFLAGS += -fno-builtin
+# -fno-builtin alone does not stop loop distribution from doing that.
+$(AMIGA_BUILD)/platform/amiga/os4/freestanding.o: CFLAGS += -fno-builtin \
+    -fno-tree-loop-distribute-patterns
 
 # Amiga assembly
 ifeq ($(AMIGA_TARGET),os4)
