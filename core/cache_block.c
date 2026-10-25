@@ -15,9 +15,15 @@
  * sectors in one device request and install them all. Directory extents
  * and small sequential reads are contiguous, so this replaces N device
  * round trips with one. Only enabled for caches large enough that the
- * cluster cannot churn a meaningful share of the entries.
+ * cluster cannot churn a meaningful share of the entries. OS4 reads the
+ * cluster straight into the staging buffer, so a longer one costs only
+ * the transfer.
  */
+#if defined(__amigaos4__)
+#define ODFS_CACHE_READAHEAD 32u
+#else
 #define ODFS_CACHE_READAHEAD 8u
+#endif
 
 static void cache_reset_indices(odfs_cache_t *cache)
 {
