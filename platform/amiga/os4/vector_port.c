@@ -991,15 +991,44 @@ static struct ExamineData *vp_examine_file(struct FSVP *vp,
     return ed;
 }
 
+/*
+ * Entries added to FreshNodeList per FSExamineDir call. DOS hands them
+ * out one by one and only calls back once the list is empty, so a batch
+ * saves a vector call and a directory pass per entry. Each entry of the
+ * largest batch is a node allocation, so start small for the common
+ * short directory and double the batch on every call (kept in
+ * FSPrivate[2]) for long ones.
+ */
+#define EXAMINE_DIR_BATCH_MIN 16
+#define EXAMINE_DIR_BATCH_MAX 512
+
+typedef struct examine_dir_batch {
+    handler_global_t *g;
+    struct PRIVATE_ExamineDirContext *ctx;
+} examine_dir_batch_t;
+
+static LONG examine_dir_deliver(const odfs_node_t *entry, void *user)
+{
+    examine_dir_batch_t *b = user;
+    struct ExamineData *ed;
+
+    ed = alloc_examine_data_from_context(b->g, entry, b->ctx);
+    if (!ed)
+        return ERROR_NO_FREE_STORE;
+    AddTail((struct List *)&b->ctx->FreshNodeList, (struct Node *)&ed->EXDnode);
+    return 0;
+}
+
 static int32 vp_examine_dir(struct FSVP *vp,
                             int32 *res2,
                             struct PRIVATE_ExamineDirContext *ctx)
 {
     handler_global_t *g = vp_require_global(vp, res2);
-    odfs_node_t entry;
+    examine_dir_batch_t batch;
+    ULONG key;
     uint32_t resume;
-    ULONG key = 0;
-    struct ExamineData *ed;
+    uint32_t max;
+    int done;
     LONG err;
 
     if (!g)
@@ -1010,33 +1039,34 @@ static int32 vp_examine_dir(struct FSVP *vp,
         return return_dos_status(res2, ERROR_REQUIRED_ARG_MISSING);
     }
 
+    batch.g = g;
+    batch.ctx = ctx;
+    key = ctx->FSPrivate[0];
     resume = (uint32_t)ctx->FSPrivate[1];
-    err = odfs_handler_next_dir_entry(g, lock_from_vector(ctx->ReferenceLock),
-                                      ctx->FSPrivate[0], &resume, &entry,
-                                      &key);
+    max = (uint32_t)ctx->FSPrivate[2];
+    if (key == 0 || max < EXAMINE_DIR_BATCH_MIN)
+        max = EXAMINE_DIR_BATCH_MIN;
+    err = odfs_handler_scan_dir(g, lock_from_vector(ctx->ReferenceLock),
+                                &key, &resume, max,
+                                examine_dir_deliver, &batch, &done);
     ODFS_TRACE(&g->log, ODFS_SUB_DOS,
                "FSExamineDir ctx=%p refLock=%p prevKey=%lx resume=%lu -> "
-               "err=%ld key=%lx nextResume=%lu name='%s'",
+               "err=%ld key=%lx nextResume=%lu done=%d",
                ctx, ctx->ReferenceLock,
                (unsigned long)ctx->FSPrivate[0],
                (unsigned long)ctx->FSPrivate[1],
                (long)err, (unsigned long)key,
-               (unsigned long)resume,
-               (err == 0) ? entry.name : "");
-    if (err != 0) {
-        fs_unlock(g);
-        return return_dos_status(res2, err);
-    }
-
-    ed = alloc_examine_data_from_context(g, &entry, ctx);
+               (unsigned long)resume, done);
     fs_unlock(g);
-    if (!ed)
-        return return_dos_status(res2, ERROR_NO_FREE_STORE);
+    if (err != 0)
+        return return_dos_status(res2, err);
 
-    AddTail((struct List *)&ctx->FreshNodeList, (struct Node *)&ed->EXDnode);
     ctx->FSPrivate[0] = key;
     ctx->FSPrivate[1] = resume;
-    return return_dos_status(res2, 0);
+    ctx->FSPrivate[2] = max < EXAMINE_DIR_BATCH_MAX ? max * 2 : max;
+    /* a completed scan says so with this batch, which spares DOS the
+     * call that would only find no more entries */
+    return return_dos_status(res2, done ? ERROR_NO_MORE_ENTRIES : 0);
 }
 
 static int32 vp_inhibit(struct FSVP *vp, int32 *res2, int32 inhibit_state)

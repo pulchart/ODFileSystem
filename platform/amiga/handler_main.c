@@ -3736,39 +3736,63 @@ typedef struct dir_next_ctx {
     ULONG previous_key;
     int   first;
     int   seen_previous;
-    int   found;
-    odfs_node_t entry;
+    uint32_t max;               /* entries to deliver this call */
+    uint32_t count;             /* entries delivered */
+    LONG  failed;               /* DOS error from deliver, 0 if none */
+    ULONG last_key;             /* key of the last delivered entry */
+    odfs_dir_deliver_fn deliver;
+    void *user;
 } dir_next_ctx_t;
 
 static odfs_err_t dir_next_cb(const odfs_node_t *entry, void *ctx)
 {
     dir_next_ctx_t *dc = ctx;
+    ULONG key = amiga_node_key(entry);
+    LONG err;
 
     if (!dc->first && !dc->seen_previous) {
-        if (amiga_node_key(entry) == dc->previous_key)
+        if (key == dc->previous_key)
             dc->seen_previous = 1;
         return ODFS_OK;
     }
 
-    dc->entry = *entry;
-    dc->found = 1;
-    return ODFS_ERR_EOF;
+    err = dc->deliver(entry, dc->user);
+    if (err != 0) {
+        dc->failed = err;
+        return ODFS_ERR_EOF;
+    }
+    dc->last_key = key;
+    if (++dc->count >= dc->max)
+        return ODFS_ERR_EOF;
+    return ODFS_OK;
 }
 
-LONG odfs_handler_next_dir_entry(handler_global_t *g,
-                                 odfs_lock_t *ol,
-                                 ULONG previous_key,
-                                 uint32_t *resume_io,
-                                 odfs_node_t *entry_out,
-                                 ULONG *key_out)
+/*
+ * Hand up to max entries that follow *previous_key (or the *resume_io
+ * position) to deliver(), in one pass over the directory. On return
+ * *previous_key and *resume_io describe the last delivered entry, and
+ * *done is set once the last entry of the directory has been
+ * delivered. Returns 0 when at least one entry was delivered, otherwise
+ * the DOS error; ERROR_NO_MORE_ENTRIES marks the end of the scan.
+ */
+LONG odfs_handler_scan_dir(handler_global_t *g,
+                           odfs_lock_t *ol,
+                           ULONG *previous_key,
+                           uint32_t *resume_io,
+                           uint32_t max,
+                           odfs_dir_deliver_fn deliver,
+                           void *user,
+                           int *done)
 {
     const odfs_node_t *dir;
     ULONG dir_key;
     dir_next_ctx_t dc;
-    uint32_t resume = resume_io ? *resume_io : 0;
-    int use_resume = (resume_io != NULL);
+    uint32_t resume = *resume_io;
+    int use_resume = 1;
+    int stopped;
 
-    if (!g || !entry_out || !key_out)
+    *done = 0;
+    if (!g || !deliver || max == 0)
         return ERROR_REQUIRED_ARG_MISSING;
 
     if (ol) {
@@ -3792,8 +3816,11 @@ LONG odfs_handler_next_dir_entry(handler_global_t *g,
 
     dir_key = ol ? ol->key : amiga_node_key(dir);
     memset(&dc, 0, sizeof(dc));
-    dc.previous_key = previous_key;
-    dc.first = (previous_key == 0 || previous_key == dir_key);
+    dc.previous_key = *previous_key;
+    dc.first = (dc.previous_key == 0 || dc.previous_key == dir_key);
+    dc.max = max;
+    dc.deliver = deliver;
+    dc.user = user;
     if (dc.first)
         resume = 0;
 
@@ -3801,12 +3828,10 @@ LONG odfs_handler_next_dir_entry(handler_global_t *g,
     if (g->has_cdda && dir->backend == ODFS_BACKEND_CDDA) {
         resume = 0;
         use_resume = 0;
-        if (resume_io)
-            *resume_io = 0;
     }
 
     if (g->has_cdda && !dc.first &&
-        previous_key == amiga_node_key(&g->cdda_root))
+        dc.previous_key == amiga_node_key(&g->cdda_root))
         return ERROR_NO_MORE_ENTRIES;
 #endif
 
@@ -3818,25 +3843,31 @@ LONG odfs_handler_next_dir_entry(handler_global_t *g,
         (void)cdda_backend_ops.readdir(g->cdda_ctx, &g->mount.cache,
                                        &g->log, dir, dir_next_cb, &dc,
                                        NULL);
+        stopped = dc.failed != 0 || dc.count >= dc.max;
     } else
 #endif
     {
         (void)odfs_readdir(&g->mount, dir, dir_next_cb, &dc, &resume);
+        stopped = dc.failed != 0 || dc.count >= dc.max;
 
 #if ODFS_FEATURE_CDDA
-        if (!dc.found && g->has_cdda && node_is_mount_root(g, dir) &&
-            previous_key != amiga_node_key(&g->cdda_root))
+        /* the virtual CDDA directory follows the root's real entries */
+        if (!stopped && g->has_cdda && node_is_mount_root(g, dir) &&
+            dc.previous_key != amiga_node_key(&g->cdda_root)) {
             (void)dir_next_cb(&g->cdda_root, &dc);
+            stopped = dc.failed != 0;
+        }
 #endif
     }
 
-    if (!dc.found)
-        return ERROR_NO_MORE_ENTRIES;
+    if (dc.count == 0)
+        return dc.failed ? dc.failed : ERROR_NO_MORE_ENTRIES;
 
-    *entry_out = dc.entry;
-    *key_out = amiga_node_key(&dc.entry);
-    if (use_resume)
-        *resume_io = resume;
+    *previous_key = dc.last_key;
+    /* the resume point lies past the entry deliver() refused, so fall
+     * back to finding the last delivered key */
+    *resume_io = (use_resume && !dc.failed) ? resume : 0;
+    *done = !stopped;
     return 0;
 }
 #endif
