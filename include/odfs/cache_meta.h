@@ -70,12 +70,20 @@ typedef struct odfs_meta_cache_stats {
     uint32_t evictions;    /* directories evicted */
 } odfs_meta_cache_stats_t;
 
+/* directories remembered as too big for the budget */
+#define ODFS_META_OVERSIZE_SLOTS 4
+
 typedef struct odfs_meta_cache {
     odfs_meta_dir_t *lru_head;    /* most recently used */
     odfs_meta_dir_t *lru_tail;
     uint32_t          budget;     /* bytes; 0 disables the cache */
     uint32_t          total;      /* bytes currently held */
     odfs_meta_cache_stats_t stats;
+    /* extents of directories that overflowed the budget, so lookups
+     * there skip a build that is bound to fail; length 0 = unused */
+    uint32_t          oversize_lba[ODFS_META_OVERSIZE_SLOTS];
+    uint32_t          oversize_len[ODFS_META_OVERSIZE_SLOTS];
+    uint32_t          oversize_next;
 } odfs_meta_cache_t;
 
 void odfs_meta_cache_init(odfs_meta_cache_t *mc, uint32_t budget_bytes);

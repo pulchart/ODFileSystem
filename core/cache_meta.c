@@ -70,6 +70,7 @@ void odfs_meta_cache_flush(odfs_meta_cache_t *mc)
 {
     while (mc->lru_tail)
         meta_evict(mc, mc->lru_tail);
+    memset(mc->oversize_len, 0, sizeof(mc->oversize_len));
 }
 
 void odfs_meta_cache_destroy(odfs_meta_cache_t *mc)
@@ -165,6 +166,7 @@ typedef struct meta_build_ctx {
     uint32_t           pool_cap;
     uint32_t           budget;
     int                failed;
+    int                too_big;    /* failed by outgrowing the budget */
 } meta_build_ctx_t;
 
 static void *meta_grow(void *old, size_t old_bytes, size_t new_bytes)
@@ -249,8 +251,11 @@ static odfs_err_t meta_build_cb(const odfs_node_t *entry, void *ctx)
     bc->count++;
 
     if (sizeof(odfs_meta_dir_t) +
-        (size_t)bc->count * sizeof(*bc->entries) + bc->pool_len > bc->budget)
+        (size_t)bc->count * sizeof(*bc->entries) + bc->pool_len >
+        bc->budget) {
+        bc->too_big = 1;
         goto fail;
+    }
 
     return ODFS_OK;
 
@@ -268,7 +273,8 @@ static odfs_meta_dir_t *meta_build(odfs_meta_cache_t *mc,
                                    void *backend_ctx,
                                    odfs_cache_t *block_cache,
                                    odfs_log_state_t *log,
-                                   const odfs_node_t *dir)
+                                   const odfs_node_t *dir,
+                                   int *too_big)
 {
     meta_build_ctx_t bc;
     odfs_meta_dir_t *d = NULL;
@@ -305,6 +311,7 @@ static odfs_meta_dir_t *meta_build(odfs_meta_cache_t *mc,
 out:
     odfs_free(bc.entries);
     odfs_free(bc.pool);
+    *too_big = bc.too_big;
     if (d)
         mc->stats.builds++;
     else
@@ -326,6 +333,8 @@ static odfs_meta_dir_t *meta_get(odfs_meta_cache_t *mc,
                                  int *orphan_out)
 {
     odfs_meta_dir_t *d;
+    uint32_t i;
+    int too_big;
 
     *orphan_out = 0;
 
@@ -336,9 +345,21 @@ static odfs_meta_dir_t *meta_get(odfs_meta_cache_t *mc,
     }
     mc->stats.misses++;
 
-    d = meta_build(mc, ops, backend_ctx, block_cache, log, dir);
-    if (!d)
+    for (i = 0; i < ODFS_META_OVERSIZE_SLOTS; i++) {
+        if (mc->oversize_len[i] == dir->extent.length &&
+            mc->oversize_lba[i] == dir->extent.lba)
+            return NULL;
+    }
+
+    d = meta_build(mc, ops, backend_ctx, block_cache, log, dir, &too_big);
+    if (!d) {
+        if (too_big) {
+            i = mc->oversize_next++ % ODFS_META_OVERSIZE_SLOTS;
+            mc->oversize_lba[i] = dir->extent.lba;
+            mc->oversize_len[i] = dir->extent.length;
+        }
         return NULL;
+    }
 
     if (d->bytes > mc->budget) {
         *orphan_out = 1;
