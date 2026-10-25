@@ -227,6 +227,7 @@ static int amiga_direct_memtype_ok(ULONG memtype, const void *buf,
     end_type = TypeOfMem((CONST_APTR)((ULONG)buf + len - 1));
     return ((start_type & need) == need) && ((end_type & need) == need);
 }
+#endif
 
 static int amiga_can_read_direct(handler_global_t *g, const void *buf,
                                  uint32_t len, uint32_t sectors)
@@ -236,10 +237,19 @@ static int amiga_can_read_direct(handler_global_t *g, const void *buf,
     ULONG end;
     ULONG blocked;
 
-    if (!g || !g->envec || !buf || len == 0 || sectors < 2)
+    if (!g || !g->envec || !buf || len == 0)
         return 0;
-    if (!amiga_direct_read_window_ok(g, buf, len))
+#if ODFS_AMIGA_OS4
+    /*
+     * OS4 drivers map whatever memory they are given for DMA, and the
+     * bounce buffer is ordinary shared memory as well, so any buffer
+     * the address mask accepts can take the transfer directly.
+     */
+    (void)sectors;
+#else
+    if (sectors < 2 || !amiga_direct_read_window_ok(g, buf, len))
         return 0;
+#endif
 
     de = g->envec;
     start = (ULONG)buf;
@@ -251,7 +261,11 @@ static int amiga_can_read_direct(handler_global_t *g, const void *buf,
     if ((start & blocked) != 0)
         return 0;
 
+#if ODFS_AMIGA_OS4
+    return 1;
+#else
     return amiga_direct_memtype_ok(de->de_BufMemType, buf, len);
+#endif
 }
 
 static odfs_err_t amiga_read_hi(handler_global_t *g,
@@ -322,7 +336,6 @@ static odfs_err_t amiga_read_direct(handler_global_t *g,
 
     return ODFS_OK;
 }
-#endif
 
 #ifndef NSCMD_TD_READ64
 #define NSCMD_TD_READ64 0xC000  /* devices/newstyle.h */
@@ -702,10 +715,8 @@ static odfs_err_t amiga_read_sectors(void *ctx, uint32_t lba,
     if (!req)
         return ODFS_ERR_NOMEM;
 
-#if !ODFS_AMIGA_OS4
     if (amiga_can_read_direct(g, out, total_bytes, count))
         return amiga_read_direct(g, req, lba, count, total_bytes, out);
-#endif
 
     /*
      * Read through the DMA-safe bounce buffer, one chunk at a time.
