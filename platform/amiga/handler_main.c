@@ -173,6 +173,22 @@ static int scsi_is_unsupported_command(const uint8_t *sense)
     return ((sense[2] & 0x0f) == 0x05 && sense[12] == 0x20);
 }
 
+/*
+ * Largest single device request, in whole sectors. A MaxTransfer of 0
+ * places no limit. Worked out once: the 68000 divides in software.
+ */
+static void amiga_init_max_transfer(handler_global_t *g)
+{
+    ULONG max = g->envec->de_MaxTransfer;
+
+    if (max == 0)
+        max = 0xffffffffUL;
+    g->max_transfer_blocks = max / g->sector_size;
+    if (g->max_transfer_blocks == 0)
+        g->max_transfer_blocks = 1;
+    g->max_transfer = g->max_transfer_blocks * g->sector_size;
+}
+
 #if !ODFS_AMIGA_OS4
 static int amiga_direct_read_window_ok(handler_global_t *g,
                                        const void *buf,
@@ -226,9 +242,6 @@ static int amiga_can_read_direct(handler_global_t *g, const void *buf,
         return 0;
 
     de = g->envec;
-    if (de->de_MaxTransfer != 0 && len > de->de_MaxTransfer)
-        return 0;
-
     start = (ULONG)buf;
     end = start + len - 1;
     if (end < start)
@@ -247,6 +260,7 @@ static odfs_err_t amiga_read_hi(handler_global_t *g,
                                 uint32_t bytes,
                                 void *buf);
 
+/* Read straight into buf, split into requests MaxTransfer allows. */
 static odfs_err_t amiga_read_direct(handler_global_t *g,
                                     struct IOStdReq *req,
                                     uint32_t lba,
@@ -254,42 +268,56 @@ static odfs_err_t amiga_read_direct(handler_global_t *g,
                                     uint32_t bytes,
                                     void *buf)
 {
-    ULONG byte_offset_lo;
-    ULONG byte_offset_hi = 0;
+    uint32_t max = g->max_transfer;
+    uint8_t *out = buf;
 
     (void)count; /* used by diagnostics when logging is enabled */
 
-    if (g->sector_size == 2048) {
-        byte_offset_lo = lba << 11;
-        byte_offset_hi = lba >> 21;
-    } else {
-        byte_offset_lo = lba * g->sector_size;
-    }
+    while (bytes > 0) {
+        uint32_t chunk = bytes < max ? bytes : max;
+        ULONG byte_offset_lo;
+        ULONG byte_offset_hi = 0;
 
-    if (byte_offset_hi != 0)
-        return amiga_read_hi(g, req, lba, bytes, buf);
+        if (g->sector_size == 2048) {
+            byte_offset_lo = lba << 11;
+            byte_offset_hi = lba >> 21;
+        } else {
+            byte_offset_lo = lba * g->sector_size;
+        }
 
-    req->io_Offset = byte_offset_lo;
-    req->io_Actual = 0;
-    req->io_Length = bytes;
-    req->io_Data = buf;
-    req->io_Command = CMD_READ;
+        if (byte_offset_hi != 0) {
+            if (amiga_read_hi(g, req, lba, chunk, out) != ODFS_OK)
+                return ODFS_ERR_IO;
+        } else {
+            req->io_Offset = byte_offset_lo;
+            req->io_Actual = 0;
+            req->io_Length = chunk;
+            req->io_Data = out;
+            req->io_Command = CMD_READ;
 
-    if (DoIO((struct IORequest *)req) != 0 ||
-        req->io_Error != 0 ||
-        req->io_Actual != bytes) {
-        ODFS_ERROR(&g->log, ODFS_SUB_IO,
-                   "direct read failed unit=%lu lba=%lu count=%lu "
-                   "bytes=%lu off=%lu io_Error=%ld actual=%lu cmd=%lu",
-                   (unsigned long)g->devunit,
-                   (unsigned long)lba,
-                   (unsigned long)count,
-                   (unsigned long)bytes,
-                   (unsigned long)req->io_Offset,
-                   (long)req->io_Error,
-                   (unsigned long)req->io_Actual,
-                   (unsigned long)req->io_Command);
-        return ODFS_ERR_IO;
+            if (DoIO((struct IORequest *)req) != 0 ||
+                req->io_Error != 0 ||
+                req->io_Actual != chunk) {
+                ODFS_ERROR(&g->log, ODFS_SUB_IO,
+                           "direct read failed unit=%lu lba=%lu count=%lu "
+                           "bytes=%lu off=%lu io_Error=%ld actual=%lu "
+                           "cmd=%lu",
+                           (unsigned long)g->devunit,
+                           (unsigned long)lba,
+                           (unsigned long)count,
+                           (unsigned long)chunk,
+                           (unsigned long)req->io_Offset,
+                           (long)req->io_Error,
+                           (unsigned long)req->io_Actual,
+                           (unsigned long)req->io_Command);
+                return ODFS_ERR_IO;
+            }
+        }
+
+        /* only the last chunk can be short */
+        lba += g->max_transfer_blocks;
+        out += chunk;
+        bytes -= chunk;
     }
 
     return ODFS_OK;
@@ -692,6 +720,8 @@ static odfs_err_t amiga_read_sectors(void *ctx, uint32_t lba,
         uint32_t chunk = total_bytes - done;
         if (chunk > g->dma_buf_size)
             chunk = g->dma_buf_size;
+        if (chunk > g->max_transfer)
+            chunk = g->max_transfer;
 
         uint32_t cur_lba = lba + (done / g->sector_size);
         ULONG byte_offset_lo, byte_offset_hi = 0;
@@ -5851,6 +5881,7 @@ void handler_main_startup(struct Message *startup_msg)
                   "mount entry sets no block size; assuming 2048");
         g->sector_size = 2048;
     }
+    amiga_init_max_transfer(g);
 
     ODFS_INFO(&g->log, ODFS_SUB_CORE, "libraries open, device=%s unit=%lu",
               g->devname, (unsigned long)g->devunit);

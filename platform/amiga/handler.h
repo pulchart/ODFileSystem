@@ -95,6 +95,8 @@ typedef struct handler_global {
     struct MsgPort      *devport;       /* device I/O port */
     struct IOStdReq     *devreq;        /* device I/O request */
     ULONG                sector_size;   /* device block size */
+    ULONG                max_transfer;  /* largest request in bytes */
+    ULONG                max_transfer_blocks; /* the same in sectors */
     char                 devname[128];  /* device name */
     ULONG                devunit;       /* device unit */
     ULONG                devflags;      /* device open flags */
