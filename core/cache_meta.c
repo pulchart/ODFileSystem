@@ -23,6 +23,9 @@
 
 #define META_NO_COMMENT 0xffffffffUL
 
+/* directories this large hash the name a lookup looks for */
+#define META_LOOKUP_HASH_MIN 8u
+
 /* ------------------------------------------------------------------ */
 /* LRU bookkeeping                                                     */
 /* ------------------------------------------------------------------ */
@@ -238,6 +241,7 @@ static odfs_err_t meta_build_cb(const odfs_node_t *entry, void *ctx)
     if (off == META_NO_COMMENT)
         goto fail;
     e->name_off = off;
+    e->name_hash = odfs_strcasehash(entry->name);
 
     e->has_comment = entry->amiga_as.has_comment;
     e->comment_off = META_NO_COMMENT;
@@ -507,6 +511,8 @@ odfs_err_t odfs_meta_lookup(odfs_meta_cache_t *mc,
     odfs_meta_dir_t *d;
     int orphan;
     uint32_t i;
+    unsigned int hash = 0;
+    int use_hash;
     odfs_err_t err = ODFS_ERR_NOT_FOUND;
 
     if (!meta_dir_cacheable(mc, dir))
@@ -516,8 +522,16 @@ odfs_err_t odfs_meta_lookup(odfs_meta_cache_t *mc,
     if (!d)
         return ODFS_ERR_UNSUPPORTED;
 
+    /* the hash spares the string compare on all but the matching
+     * entry, but costs more than the few compares of a small
+     * directory */
+    use_hash = d->count >= META_LOOKUP_HASH_MIN;
+    if (use_hash)
+        hash = odfs_strcasehash(name);
+
     for (i = 0; i < d->count; i++) {
-        if (odfs_strcasecmp(d->pool + d->entries[i].name_off, name) == 0) {
+        if ((!use_hash || d->entries[i].name_hash == hash) &&
+            odfs_strcasecmp(d->pool + d->entries[i].name_off, name) == 0) {
             meta_entry_to_node(d, &d->entries[i], out);
             err = ODFS_OK;
             break;

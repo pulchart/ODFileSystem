@@ -40,6 +40,7 @@ typedef struct odfs_meta_entry {
     odfs_timestamp_t ctime;
     uint32_t mode;
     uint32_t name_off;     /* offset into the directory's string pool */
+    uint32_t name_hash;    /* odfs_strcasehash() of the name */
     uint32_t comment_off;  /* offset into pool, UINT32_MAX = no comment */
     uint8_t  kind;
     uint8_t  backend;

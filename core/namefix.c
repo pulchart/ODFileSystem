@@ -77,18 +77,6 @@ static void *odfs_namefix_alloc(odfs_namefix_state_t *state, size_t size)
     return (void *)(chunk + 1);
 }
 
-static unsigned int odfs_namefix_hash(const char *name)
-{
-    unsigned int hash = 2166136261u;
-
-    while (*name) {
-        hash ^= odfs_ascii_tolower((unsigned char)*name++);
-        hash *= 16777619u;
-    }
-
-    return hash;
-}
-
 static int odfs_namefix_contains(const odfs_namefix_state_t *state,
                                  const char *name, unsigned int hash)
 {
@@ -131,7 +119,7 @@ odfs_err_t odfs_namefix_apply(odfs_namefix_state_t *state,
     if (name_size == 0)
         return ODFS_ERR_INVAL;
 
-    hash = odfs_namefix_hash(name);
+    hash = odfs_strcasehash(name);
     if (!odfs_namefix_contains(state, name, hash))
         return odfs_namefix_remember(state, name, hash);
 
@@ -167,7 +155,7 @@ odfs_err_t odfs_namefix_apply(odfs_namefix_state_t *state,
         memcpy(name, base, base_len);
         memcpy(name + base_len, suffix, (size_t)suffix_len + 1);
 
-        hash = odfs_namefix_hash(name);
+        hash = odfs_strcasehash(name);
         if (!odfs_namefix_contains(state, name, hash))
             return odfs_namefix_remember(state, name, hash);
     }
