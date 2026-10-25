@@ -140,6 +140,12 @@
 #ifdef ODFS_PROFILE_ROM
   #define ODFS_BLOCK_CACHE_SIZE     16
   #define ODFS_META_CACHE_KIB        0
+#elif defined(__amigaos4__)
+  /* OS4 machines have memory to spare: 2 MiB of sectors, and a
+   * parsed-directory budget that holds directories of several
+   * thousand entries */
+  #define ODFS_BLOCK_CACHE_SIZE   1024
+  #define ODFS_META_CACHE_KIB     1024
 #else
   #define ODFS_BLOCK_CACHE_SIZE    128
   /* parsed-directory cache budget in KiB (0 disables) */

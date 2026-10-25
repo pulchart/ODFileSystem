@@ -114,7 +114,7 @@ Mount Options
 
 Options can be supplied with the DOSDriver Control string:
 
-       Control = "LOWERCASE UDF FILEBUFFERS=128"
+       Control = "LOWERCASE UDF"
 
 Supported options include:
 
@@ -134,7 +134,11 @@ Supported options include:
   Prefer HFS on hybrid HFS/ISO discs.
 
 - FILEBUFFERS=n or FB=n
-  Set the filesystem block-cache size.
+  Set the block-cache size in sectors (default 128, 256 KiB).
+
+- METACACHE=n or MC=n
+  Set the parsed-directory cache size in KiB (default 96, 0 turns it
+  off).
 
 - AIFF
   Expose CDDA audio tracks as AIFF files instead of WAV files.

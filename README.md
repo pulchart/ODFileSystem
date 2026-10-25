@@ -101,7 +101,7 @@ Control = "UDF"
 You can combine that with other control flags, for example:
 
 ```text
-Control = "UDF LOWERCASE FILEBUFFERS=128"
+Control = "UDF LOWERCASE"
 ```
 
 ### Name Collision Policy
@@ -354,7 +354,7 @@ without it, Mount silently uses that ROM filesystem instead of
 Optional handler control flags can be supplied through the mount entry control string, for example:
 
 ```text
-Control = "LOWERCASE UDF FILEBUFFERS=128"
+Control = "LOWERCASE UDF"
 ```
 
 Supported control flags:
@@ -364,7 +364,10 @@ Supported control flags:
 - `NOJOLIET` or `NOJ` to disable Joliet
 - `HFSFIRST` or `HF` to prefer HFS on hybrid discs
 - `UDF` to prefer UDF on bridge discs
-- `FILEBUFFERS` or `FB` to set the block-cache size
+- `FILEBUFFERS=n` or `FB=n` to set the block-cache size in sectors
+  (default 128 on AmigaOS 3, 1024 on AmigaOS 4)
+- `METACACHE=n` or `MC=n` to set the parsed-directory cache size in KiB
+  (default 96 on AmigaOS 3, 1024 on AmigaOS 4; 0 turns it off)
 
 See [mountlist.example](/Users/stepan/git/ODFileSystem/docs/mountlist.example)
 for a fuller example with hardware notes, and
